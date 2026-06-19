@@ -93,7 +93,7 @@ export default function TimeClockManagement() {
 
       <details className="mt-6 rounded-xl border border-slate-200 p-4">
         <summary className="cursor-pointer font-black text-luvig-ink">Histórico de alterações ({audit.length})</summary>
-        <div className="mt-4 space-y-2">{audit.map((item) => <div key={item.id} className="rounded-lg bg-slate-50 p-3 text-sm font-semibold text-slate-600"><strong className="text-luvig-ink">{item.action === 'edit' ? 'Edição' : item.action === 'delete' ? 'Remoção' : 'Restauração'}</strong> · {item.reason}<br /><span className="text-xs">{item.changer?.full_name || 'Vinícius Miranda'} · {new Date(item.created_at).toLocaleString('pt-BR')}</span></div>)}{!audit.length && <p className="text-sm font-semibold text-slate-500">Nenhuma alteração registrada.</p>}</div>
+        <div className="mt-4 space-y-2">{audit.map((item) => <div key={item.id} className="rounded-lg bg-slate-50 p-3 text-sm font-semibold text-slate-600"><strong className="text-luvig-ink">{{ create: 'Criação', edit: 'Edição', delete: 'Remoção', restore: 'Restauração', day_status: 'Situação do dia', schedule: 'Jornada' }[item.action] || item.action}</strong> · {item.reason}<br /><span className="text-xs">{item.changer?.full_name || 'Vinícius Miranda'} · {new Date(item.created_at).toLocaleString('pt-BR')}</span></div>)}{!audit.length && <p className="text-sm font-semibold text-slate-500">Nenhuma alteração registrada.</p>}</div>
       </details>
     </section>
   );

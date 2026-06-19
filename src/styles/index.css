@@ -121,6 +121,37 @@ a[aria-disabled='true'] {
   background: rgba(147, 197, 253, 0.48);
 }
 
+@media print {
+  aside,
+  header,
+  nav,
+  button,
+  .no-print {
+    display: none !important;
+  }
+
+  body,
+  main,
+  .page-shell,
+  .surface-card {
+    width: 100% !important;
+    max-width: none !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+  }
+
+  table {
+    width: 100% !important;
+    table-layout: auto;
+    font-size: 8pt;
+  }
+
+  tr,
+  article {
+    break-inside: avoid;
+  }
+}
+
 .sidebar-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(219, 234, 254, 0.72);
 }

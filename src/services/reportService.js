@@ -3,10 +3,26 @@ import officialLogo from '../assets/luvig-logo-oficial.png';
 import { currencyBRL, shortDate } from '../utils/formatters.js';
 import { formatTenure } from '../utils/employeeDates.js';
 import { getFriendlyError } from './serviceHelpers.js';
+import {
+  buildClockDays,
+  formatMinutes,
+  getClockHistory,
+  getDayStatuses,
+  getHolidays,
+  getPeriodBounds,
+  getTimeClockOwnerId,
+  getWorkScheduleSettings,
+  summarizeClockDays,
+} from './timeClockService.js';
 
 export const reportLabels = {
   employees: 'Funcionários', occurrences: 'Ocorrências', scores: 'Notas', vacations: 'Férias',
-  medical: 'Atestados', clients: 'Clientes', financial: 'Financeiro',
+  medical: 'Atestados', clients: 'Condomínios e clientes', financial: 'Financeiro',
+  absences: 'Faltas', warnings: 'Advertências', suspensions: 'Suspensões', notices: 'Avisos prévios',
+  complaints: 'Reclamações', requests: 'Pedidos', services: 'Serviços contratados',
+  entries: 'Entradas', expenses: 'Saídas', terminations: 'Rescisões', fuel: 'Combustível',
+  uniforms: 'Uniformes', equipment: 'Equipamentos', products: 'Produtos', documents: 'Documentos',
+  users: 'Usuários', audits: 'Auditorias', time_clock: 'Ponto',
 };
 
 const statusLabels = {
@@ -26,6 +42,11 @@ const typeLabels = {
 
 const label = (map, value) => map[value] || value || 'Não informado';
 const within = (value, from, to) => (!from || value >= from) && (!to || value <= to);
+const occurrenceReports = {
+  absences: ['falta'], warnings: ['advertencia'], suspensions: ['suspensao'], notices: ['aviso_previo'],
+  complaints: ['predio_sujo', 'servico_nao_realizado', 'reclamacao_sindico', 'problema_condominio'],
+};
+const expenseReports = { terminations: 'rescisao', fuel: 'combustivel', uniforms: 'uniformes', equipment: 'equipamentos', products: 'produtos' };
 
 async function queryOrThrow(query) {
   const result = await query;
@@ -57,6 +78,105 @@ export async function getReport(type, filters = {}, role = 'RH') {
   if (type === 'financial' && role !== 'Admin') return { data: [], chart: [], error: 'Sem permissão para visualizar o relatório financeiro.' };
 
   try {
+    if (type === 'time_clock') {
+      const owner = await getTimeClockOwnerId();
+      if (owner.error || !owner.data) throw new Error(owner.error || 'Perfil do Vinícius não encontrado.');
+      const currentBounds = getPeriodBounds();
+      const dateFrom = filters.dateFrom || currentBounds.startDate;
+      const dateTo = filters.dateTo || currentBounds.endDate;
+      const [history, settings, statuses, holidays] = await Promise.all([
+        getClockHistory(owner.data, { limit: 3000 }), getWorkScheduleSettings(owner.data),
+        getDayStatuses(owner.data, { dateFrom, dateTo }), getHolidays({ dateFrom, dateTo }),
+      ]);
+      const serviceError = history.error || settings.error || statuses.error || holidays.error;
+      if (serviceError) throw new Error(serviceError);
+      let days = buildClockDays({ records: history.data, settings: settings.data, statuses: statuses.data, holidays: holidays.data, startDate: dateFrom, endDate: dateTo, includeEmpty: true });
+      if (filters.status) days = days.filter((day) => day.dayStatus?.status === filters.status || day.statusLabel.toLocaleLowerCase('pt-BR').includes(filters.status));
+      if (filters.type === 'late') days = days.filter((day) => day.scheduleAlerts.some((item) => item.includes('Entrada atrasada')));
+      if (filters.type === 'extra') days = days.filter((day) => day.balanceMinutes > 0);
+      if (filters.type === 'negative') days = days.filter((day) => day.balanceMinutes < 0);
+      if (filters.type === 'incomplete') days = days.filter((day) => day.incomplete);
+      if (filters.type === 'edited') days = days.filter((day) => day.edited);
+      const summary = summarizeClockDays(days);
+      return {
+        data: days.map((day) => ({
+          date: new Date(`${day.referenceDate}T12:00:00`).toLocaleDateString('pt-BR'),
+          weekday: new Date(`${day.referenceDate}T12:00:00`).toLocaleDateString('pt-BR', { weekday: 'short' }),
+          entry: clockTime(day.entry), lunchOut: clockTime(day.lunchOut), lunchReturn: clockTime(day.lunchReturn), exit: clockTime(day.exit),
+          breakTime: formatMinutes(day.intervalMinutes), worked: formatMinutes(day.workedMinutes), expected: formatMinutes(day.expectedMinutes),
+          balance: formatMinutes(day.balanceMinutes, { signed: true }), status: day.statusLabel,
+          schedule: day.scheduleAlerts.join('; ') || 'Regular', edited: day.edited ? 'Sim' : 'Não', justification: day.dayStatus?.reason || day.holiday?.notes || '—',
+        })),
+        chart: [], summary: { ...summary, dateFrom, dateTo }, error: null,
+      };
+    }
+
+    if (occurrenceReports[type]) {
+      let query = supabase.from('occurrences').select('id, type, title, occurrence_date, status, description, employee_id, employees(full_name), clients(name), created_by_profile:profiles!occurrences_created_by_fkey(full_name)').in('type', occurrenceReports[type]).order('occurrence_date', { ascending: false });
+      if (filters.employeeId) query = query.eq('employee_id', filters.employeeId);
+      if (filters.clientId) query = query.eq('client_id', filters.clientId);
+      if (filters.status) query = query.eq('status', filters.status);
+      if (filters.dateFrom) query = query.gte('occurrence_date', filters.dateFrom);
+      if (filters.dateTo) query = query.lte('occurrence_date', filters.dateTo);
+      const rows = await queryOrThrow(query);
+      return { data: rows.map((item) => ({ condominium: item.clients?.name || 'Sem vínculo', type: label(typeLabels, item.type), employee: item.employees?.full_name || 'Sem vínculo', description: item.title || item.description || '—', status: label(statusLabels, item.status), date: shortDate(item.occurrence_date), responsible: item.created_by_profile?.full_name || 'Não informado' })), chart: [], error: null };
+    }
+
+    if (type === 'requests') {
+      let query = supabase.from('requests').select('id, type, title, urgency, status, created_at, employees(full_name), clients(name), requester:profiles!requests_requested_by_fkey(full_name)').order('created_at', { ascending: false });
+      if (filters.status) query = query.eq('status', filters.status);
+      if (filters.clientId) query = query.eq('client_id', filters.clientId);
+      if (filters.employeeId) query = query.eq('employee_id', filters.employeeId);
+      if (filters.dateFrom) query = query.gte('created_at', `${filters.dateFrom}T00:00:00`);
+      if (filters.dateTo) query = query.lte('created_at', `${filters.dateTo}T23:59:59`);
+      const rows = await queryOrThrow(query);
+      return { data: rows.map((item) => ({ condominium: item.clients?.name || 'Sem vínculo', type: item.type, status: label(statusLabels, item.status), title: item.title, employee: item.employees?.full_name || '—', urgency: item.urgency, responsible: item.requester?.full_name || 'Não informado', date: new Date(item.created_at).toLocaleDateString('pt-BR') })), chart: [], error: null };
+    }
+
+    if (type === 'documents') {
+      let query = supabase.from('documents').select('id, title, type, status, created_at, employees(full_name), clients(name), uploader:profiles!documents_uploaded_by_fkey(full_name)').order('created_at', { ascending: false });
+      if (filters.status) query = query.eq('status', filters.status);
+      if (filters.employeeId) query = query.eq('employee_id', filters.employeeId);
+      if (filters.clientId) query = query.eq('client_id', filters.clientId);
+      const rows = await queryOrThrow(query);
+      return { data: rows.map((item) => ({ title: item.title || 'Documento', type: item.type, employee: item.employees?.full_name || '—', condominium: item.clients?.name || '—', status: item.status, responsible: item.uploader?.full_name || 'Não informado', date: new Date(item.created_at).toLocaleDateString('pt-BR') })), chart: [], error: null };
+    }
+
+    if (type === 'users') {
+      if (role !== 'Admin') return { data: [], chart: [], error: 'Sem permissão para visualizar usuários.' };
+      const rows = await queryOrThrow(supabase.from('profiles').select('full_name, email, role, status, time_clock_access, last_access_at').order('full_name'));
+      return { data: rows.map((item) => ({ name: item.full_name, email: item.email, role: item.role, status: item.status, timeClockAccess: item.time_clock_access, lastAccess: item.last_access_at ? new Date(item.last_access_at).toLocaleString('pt-BR') : 'Nunca' })), chart: [], error: null };
+    }
+
+    if (type === 'audits') {
+      if (role !== 'Admin') return { data: [], chart: [], error: 'Sem permissão para visualizar auditorias.' };
+      const rows = await queryOrThrow(supabase.from('audit_logs').select('action, entity_type, entity_id, details, created_at, actor:profiles!audit_logs_actor_id_fkey(full_name)').order('created_at', { ascending: false }).limit(1000));
+      return { data: rows.map((item) => ({ date: new Date(item.created_at).toLocaleString('pt-BR'), responsible: item.actor?.full_name || 'Sistema', action: item.action, entity: item.entity_type, description: JSON.stringify(item.details || {}) })), chart: [], error: null };
+    }
+
+    if (type === 'services') {
+      const rows = (await queryOrThrow(supabase.rpc('list_clients_secure', { target_client_id: filters.clientId || null }))).filter((item) => !filters.status || item.status === filters.status);
+      return { data: rows.flatMap((item) => (item.contracted_services || ['Não informado']).map((service) => ({ condominium: item.name, service, neighborhood: item.neighborhood || 'Não informado', status: label(statusLabels, item.status), monthlyValue: role === 'Admin' ? currencyBRL(item.monthly_value) : 'Restrito ao Admin' }))), chart: [], error: null };
+    }
+
+    if (type === 'entries' || type === 'expenses' || expenseReports[type]) {
+      if (role !== 'Admin') return { data: [], chart: [], error: 'Sem permissão para visualizar dados financeiros.' };
+      if (type === 'entries') {
+        let query = supabase.from('financial_entries').select('title, type, amount, status, due_date, paid_date, clients(name)').order('due_date', { ascending: false });
+        if (filters.clientId) query = query.eq('client_id', filters.clientId);
+        if (filters.status) query = query.eq('status', filters.status);
+        const rows = await queryOrThrow(query);
+        return { data: rows.map((item) => ({ description: item.title, type: item.type, client: item.clients?.name || '—', date: shortDate(item.paid_date || item.due_date), status: label(statusLabels, item.status), value: currencyBRL(item.amount) })), chart: [], error: null };
+      }
+      let query = supabase.from('financial_expenses').select('title, category, amount, status, expense_date, notes').order('expense_date', { ascending: false });
+      if (expenseReports[type]) query = query.eq('category', expenseReports[type]);
+      if (filters.status) query = query.eq('status', filters.status);
+      if (filters.dateFrom) query = query.gte('expense_date', filters.dateFrom);
+      if (filters.dateTo) query = query.lte('expense_date', filters.dateTo);
+      const rows = await queryOrThrow(query);
+      return { data: rows.map((item) => ({ description: item.title, category: item.category, date: shortDate(item.expense_date), status: label(statusLabels, item.status), value: currencyBRL(item.amount), notes: item.notes || '—' })), chart: [], error: null };
+    }
+
     if (type === 'medical') {
       let query = supabase
         .from('occurrences')
@@ -152,8 +272,12 @@ export async function getReport(type, filters = {}, role = 'RH') {
   }
 }
 
-function columnTitle(key) {
-  const titles = { ranking: '#', name: 'Nome', role: 'Função', score: 'Nota', attention: 'Situação', status: 'Status', tenure: 'Tempo de casa', type: 'Tipo', employee: 'Funcionário', date: 'Data', responsible: 'Responsável', nextVacation: 'Próximas férias', returnDate: 'Retorno previsto', condominium: 'Condomínio', monthlyValue: 'Valor mensal', services: 'Serviços contratados', movement: 'Movimento', description: 'Descrição', client: 'Cliente', value: 'Valor' };
+function clockTime(record) {
+  return record ? new Date(record.clock_time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
+}
+
+export function columnTitle(key) {
+  const titles = { ranking: '#', name: 'Nome', email: 'E-mail', role: 'Função', score: 'Nota', attention: 'Situação', status: 'Status', tenure: 'Tempo de casa', type: 'Tipo', employee: 'Funcionário', date: 'Data', responsible: 'Responsável', nextVacation: 'Próximas férias', returnDate: 'Retorno previsto', condominium: 'Condomínio / cliente', monthlyValue: 'Valor mensal', services: 'Serviços contratados', service: 'Serviço contratado', neighborhood: 'Bairro', movement: 'Movimento', description: 'Descrição', title: 'Título', client: 'Cliente', value: 'Valor', urgency: 'Urgência', category: 'Categoria', notes: 'Observação', action: 'Ação', entity: 'Entidade', timeClockAccess: 'Acesso ao ponto', lastAccess: 'Último acesso', weekday: 'Dia', entry: 'Entrada', lunchOut: 'Saída almoço', lunchReturn: 'Retorno almoço', exit: 'Saída', breakTime: 'Intervalo', worked: 'Trabalhado', expected: 'Meta', balance: 'Saldo', schedule: 'Horário', edited: 'Editado', justification: 'Justificativa' };
   return titles[key] || key;
 }
 
@@ -180,19 +304,74 @@ async function loadOfficialLogo() {
   }
 }
 
-function drawPdfHeader(doc, title, generatedAt, logoDataUrl) {
-  if (logoDataUrl) doc.addImage(logoDataUrl, 'PNG', 10, 2, 34, 28, undefined, 'FAST');
+const reportSubtitles = {
+  time_clock: 'Controle de jornada — Vinícius Miranda', employees: 'Quadro funcional, situação e tempo de casa',
+  occurrences: 'Ocorrências operacionais registradas no período', requests: 'Pedidos organizados por condomínio, tipo e situação',
+  complaints: 'Reclamações por condomínio, funcionário e situação', financial: 'Movimentação financeira consolidada',
+};
+
+function filterPeriod(filters = {}, summary = {}) {
+  const from = filters.dateFrom || summary.dateFrom;
+  const to = filters.dateTo || summary.dateTo;
+  if (!from && !to) return 'Todos os registros disponíveis';
+  const format = (value) => value ? new Date(`${value}T12:00:00`).toLocaleDateString('pt-BR') : 'início';
+  return `${format(from)} a ${format(to)}`;
+}
+
+function drawPdfHeader(doc, { title, subtitle, generatedAt, generatedBy, period }, logoDataUrl) {
+  if (logoDataUrl) doc.addImage(logoDataUrl, 'PNG', 12, 5, 30, 21, undefined, 'FAST');
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(15);
-  doc.text(title, 48, 16);
+  doc.text(title.toLocaleUpperCase('pt-BR'), 47, 12);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
+  doc.setFontSize(9);
+  doc.text(subtitle, 47, 17);
+  doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
-  doc.text(`Gerado em ${generatedAt.toLocaleDateString('pt-BR')}`, doc.internal.pageSize.getWidth() - 14, 16, { align: 'right' });
+  doc.text(`Gerado por: ${generatedBy}`, 47, 22);
+  doc.text(`Data: ${generatedAt.toLocaleString('pt-BR')}  |  Período: ${period}`, 47, 26);
+  doc.setDrawColor(203, 213, 225);
+  doc.line(12, 30, doc.internal.pageSize.getWidth() - 12, 30);
 }
 
-export async function exportReportPdf({ type, rows }) {
+function drawWatermark(doc, logoDataUrl) {
+  if (!logoDataUrl) return;
+  const width = doc.internal.pageSize.getWidth();
+  const height = doc.internal.pageSize.getHeight();
+  try {
+    const transparent = new doc.GState({ opacity: 0.07 });
+    doc.setGState(transparent);
+    doc.addImage(logoDataUrl, 'PNG', width / 2 - 48, height / 2 - 32, 96, 64, undefined, 'FAST');
+    doc.setGState(new doc.GState({ opacity: 1 }));
+  } catch {
+    // Header logo remains available when the PDF engine cannot apply transparency.
+  }
+}
+
+function drawPdfFooter(doc, generatedAt, totalPagesToken) {
+  const page = doc.internal.getCurrentPageInfo().pageNumber;
+  const width = doc.internal.pageSize.getWidth();
+  const height = doc.internal.pageSize.getHeight();
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`LUVIG Serviços - LUVIG Admin - Documento de uso interno - Página ${page} de ${totalPagesToken}`, 12, height - 7);
+  doc.text(generatedAt.toLocaleString('pt-BR'), width - 12, height - 7, { align: 'right' });
+}
+
+function pdfSummary(type, rows, summary = {}) {
+  if (type === 'time_clock') return `Resumo: esperado ${formatMinutes(summary.totalExpectedMinutes)} | trabalhado ${formatMinutes(summary.totalWorkedMinutes)} | extras ${formatMinutes(summary.extraMinutes)} | negativas ${formatMinutes(summary.negativeMinutes)} | saldo ${formatMinutes(summary.balanceMinutes, { signed: true })}`;
+  if (type === 'financial') return `Resumo: entradas ${currencyBRL(summary.entriesTotal)} | saídas ${currencyBRL(summary.expensesTotal)} | saldo ${currencyBRL(summary.balance)}`;
+  return `Resumo: ${rows.length} registro(s) no resultado selecionado.`;
+}
+
+function pdfFilters(filters = {}) {
+  const values = [filters.status && `status ${filters.status}`, filters.type && `tipo ${filters.type}`, filters.employeeId && 'funcionário selecionado', filters.clientId && 'cliente selecionado'].filter(Boolean);
+  return `Filtros: ${values.length ? values.join(' | ') : 'sem filtros adicionais'}`;
+}
+
+async function createReportPdf({ type, rows, generatedBy = 'Usuário não identificado', filters = {}, summary = {} }) {
   if (!rows?.length) throw new Error('Sem dados para exibir.');
   const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
   const title = `Relatório de ${reportLabels[type] || type}`;
@@ -200,27 +379,53 @@ export async function exportReportPdf({ type, rows }) {
   const doc = new jsPDF({ orientation: keys.length > 5 ? 'landscape' : 'portrait', unit: 'mm', format: 'a4' });
   const generatedAt = new Date();
   const logoDataUrl = await loadOfficialLogo();
-  drawPdfHeader(doc, title, generatedAt, logoDataUrl);
+  const header = { title, subtitle: reportSubtitles[type] || 'Dados reais consolidados do LUVIG Admin', generatedAt, generatedBy, period: filterPeriod(filters, summary) };
+  const totalPagesToken = '{total_pages_count_string}';
   autoTable(doc, {
-    startY: 28,
+    startY: 42,
     head: [keys.map(columnTitle)],
     body: rows.map((row) => keys.map((key) => String(row[key] ?? '—'))),
     theme: 'grid',
-    styles: { fontSize: 8, cellPadding: 2.4, textColor: [30, 41, 59], lineColor: [226, 232, 240] },
+    styles: { fontSize: keys.length > 10 ? 6.2 : 7.5, cellPadding: 2, textColor: [30, 41, 59], lineColor: [226, 232, 240], overflow: 'linebreak', valign: 'top' },
     headStyles: { fillColor: [22, 87, 196], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [248, 250, 252] },
-    didDrawPage: () => {
-      const page = doc.internal.getCurrentPageInfo().pageNumber;
-      const height = doc.internal.pageSize.getHeight();
-      if (page > 1) drawPdfHeader(doc, title, generatedAt, logoDataUrl);
-      doc.setFontSize(8);
-      doc.setTextColor(100, 116, 139);
-      doc.text(`Página ${page}`, 14, height - 8);
-      doc.text(generatedAt.toLocaleString('pt-BR'), doc.internal.pageSize.getWidth() - 14, height - 8, { align: 'right' });
+    willDrawPage: () => {
+      drawWatermark(doc, logoDataUrl);
+      drawPdfHeader(doc, header, logoDataUrl);
+      if (doc.internal.getCurrentPageInfo().pageNumber === 1) {
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setTextColor(30, 41, 59);
+        doc.text(pdfSummary(type, rows, summary), 12, 35, { maxWidth: doc.internal.pageSize.getWidth() - 24 });
+        doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 116, 139);
+        doc.text(pdfFilters(filters), 12, 39, { maxWidth: doc.internal.pageSize.getWidth() - 24 });
+      }
     },
-    margin: { top: 28, bottom: 16 },
+    didDrawPage: () => drawPdfFooter(doc, generatedAt, totalPagesToken),
+    margin: { top: 34, right: 10, bottom: 16, left: 10 },
+    horizontalPageBreak: true,
+    horizontalPageBreakRepeat: 0,
   });
+  if (typeof doc.putTotalPages === 'function') doc.putTotalPages(totalPagesToken);
+  return { doc, title, generatedAt };
+}
+
+export async function exportReportPdf(args) {
+  const { doc, title, generatedAt } = await createReportPdf(args);
   doc.save(`${safeFilename(title)}-${generatedAt.toISOString().slice(0, 10)}.pdf`);
+}
+
+export async function previewReportPdf(args) {
+  const { doc } = await createReportPdf(args);
+  const url = doc.output('bloburl');
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+export async function printReportPdf(args) {
+  const preview = window.open('', '_blank');
+  if (!preview) throw new Error('Permita pop-ups para imprimir o relatório.');
+  const { doc } = await createReportPdf(args);
+  const url = doc.output('bloburl');
+  preview.location.href = url;
+  window.setTimeout(() => { try { preview.print(); } catch { /* A prévia continua aberta para impressão manual. */ } }, 1200);
 }
 
 function excelColumn(index) {

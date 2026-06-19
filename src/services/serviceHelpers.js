@@ -7,19 +7,19 @@ export function getFriendlyError(error, fallback = 'Erro ao carregar dados.') {
   const message = error.message ?? fallback;
 
   if (/invalid login credentials/i.test(message)) {
-    return 'Login inválido.';
+    return 'E-mail ou senha incorretos.';
   }
 
   if (/invalid.*captcha|captcha.*invalid|captcha verification.*failed/i.test(message)) {
-    return 'CAPTCHA inválido.';
+    return 'Não foi possível validar o CAPTCHA.';
   }
 
   if (/captcha/i.test(message)) {
-    return 'Erro ao validar CAPTCHA.';
+    return 'Não foi possível validar o CAPTCHA.';
   }
 
   if (/failed to fetch|network/i.test(message)) {
-    return 'Não foi possível conectar ao Supabase agora.';
+    return 'Erro ao conectar com a autenticação.';
   }
 
   if (/jwt|permission|rls|row-level/i.test(message)) {

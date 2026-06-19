@@ -6,7 +6,12 @@ const GIRLANE_EMAIL = 'giadmiluvig@gmail.com';
 
 export function getTimeClockAccess(profile, user) {
   const email = (profile?.email || user?.email || '').toLocaleLowerCase('pt-BR');
-  const isVinicius = profile?.id === VINICIUS_PROFILE_ID || VINICIUS_EMAILS.includes(email);
-  const isGirlane = (profile?.id === GIRLANE_PROFILE_ID || email === GIRLANE_EMAIL) && profile?.role === 'admin';
+  const hasStoredAccess = ['write', 'read', 'none'].includes(profile?.time_clock_access);
+  const isVinicius = hasStoredAccess
+    ? profile.time_clock_access === 'write'
+    : profile?.id === VINICIUS_PROFILE_ID || VINICIUS_EMAILS.includes(email);
+  const isGirlane = hasStoredAccess
+    ? profile.time_clock_access === 'read'
+    : (profile?.id === GIRLANE_PROFILE_ID || email === GIRLANE_EMAIL) && profile?.role === 'admin';
   return { canView: isVinicius || isGirlane, canWrite: isVinicius, isGirlane, isVinicius };
 }

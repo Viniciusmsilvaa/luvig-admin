@@ -41,11 +41,12 @@ export default function Login() {
       return;
     }
 
-    const result = await login({ email, password, captchaToken });
+    const submittedCaptchaToken = captchaToken;
+    setCaptchaToken('');
+    const result = await login({ email, password, captchaToken: submittedCaptchaToken });
     if (result.ok) {
       navigate(location.state?.from ?? '/dashboard', { replace: true });
     } else {
-      setCaptchaToken('');
       setCaptchaResetKey((value) => value + 1);
     }
   }
@@ -107,8 +108,8 @@ export default function Login() {
           <TurnstileCaptcha
             resetKey={captchaResetKey}
             onToken={(token) => { setCaptchaToken(token); setLocalError(''); }}
-            onExpired={() => { setCaptchaToken(''); setLocalError('CAPTCHA expirado. Tente novamente.'); }}
-            onError={() => { setCaptchaToken(''); setLocalError('Erro ao validar CAPTCHA.'); }}
+            onExpired={() => { setCaptchaToken(''); setLocalError('O CAPTCHA expirou. Valide novamente.'); }}
+            onError={() => { setCaptchaToken(''); setLocalError('Não foi possível validar o CAPTCHA.'); }}
           />
           {!captchaToken && isCaptchaConfigured() && !visibleError && <p className="text-center text-xs font-semibold text-slate-500">Confirme que você não é um robô.</p>}
 

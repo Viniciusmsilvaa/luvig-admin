@@ -4,6 +4,7 @@ import FormInput from '../components/FormInput.jsx';
 import LogoMark from '../components/LogoMark.jsx';
 import PageTitle from '../components/PageTitle.jsx';
 import TimeClockManagement from '../components/TimeClockManagement.jsx';
+import TimeClockSettings from '../components/TimeClockSettings.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { expenseCategoryOptions } from '../services/financeService.js';
 import { occurrenceTypeOptions, scoreRuleOptions } from '../services/occurrenceService.js';
@@ -76,12 +77,13 @@ export default function Configuracoes() {
         <div className="grid items-center gap-6 md:grid-cols-[220px,1fr]">
           <div className="flex min-h-36 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-950 to-luvig-blue p-4"><LogoMark size="lg" className="!h-24 !w-full" /></div>
           <div>
-            <SectionTitle icon={Info} title="Sobre o Sistema" subtitle="LUVIG Admin · versão 0.1.0" />
-            <p className="mt-4 max-w-2xl text-sm font-semibold leading-6 text-slate-600">Plataforma interna da LUVIG Serviços Especializados para gestão de pessoas, clientes, documentos, ocorrências, relatórios e rotinas administrativas.</p>
+            <SectionTitle icon={Info} title="Sobre o Sistema" subtitle="LUVIG Admin · versão 1.0.0" />
+            <p className="mt-4 max-w-2xl text-sm font-semibold leading-6 text-slate-600">Primeira versão pronta para uso interno da LUVIG Serviços Especializados, com gestão de pessoas, clientes, documentos, ocorrências, relatórios e controle de jornada.</p>
           </div>
         </div>
       </section>
 
+      <TimeClockSettings />
       <TimeClockManagement />
 
       <section className="surface-card p-5">

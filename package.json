@@ -1,12 +1,13 @@
 {
   "name": "luvig-admin",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --test src/utils/timeClock.test.js src/auth/accessRules.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
